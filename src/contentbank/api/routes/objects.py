@@ -7,7 +7,7 @@ from __future__ import annotations
 import base64, json
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Header
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
@@ -15,6 +15,7 @@ from contentbank.db.database import get_db
 from contentbank.db.models import Object as ObjectRow
 from contentbank.core.models import ObjectResponse, BlobAttachmentModel, Page
 from contentbank.core import storage as store
+from contentbank.auth.dependencies import require_agent
 
 router = APIRouter(prefix="/objects", tags=["objects"])
 
@@ -73,17 +74,6 @@ def _row_to_response(obj: ObjectRow) -> ObjectResponse:
     )
 
 
-def _get_requesting_agent(x_agent_id: Optional[str]) -> str:
-    """
-    Extract requesting agent ID from header.
-    In production this will be derived from a verified JWT.
-    For now accepts X-Agent-Id header directly (dev only).
-    """
-    if not x_agent_id:
-        raise HTTPException(status_code=401, detail="X-Agent-Id header required")
-    return x_agent_id
-
-
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -91,15 +81,13 @@ def _get_requesting_agent(x_agent_id: Optional[str]) -> str:
 @router.post("/", response_model=ObjectResponse, status_code=201)
 async def create_object(
     body: ObjectCreateRequest,
-    x_agent_id: Optional[str] = Header(None),
+    requesting_agent_id: str = Depends(require_agent),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Create a new ContentBank object.
     Runs SHACL validation before write.
     """
-    requesting_agent_id = _get_requesting_agent(x_agent_id)
-
     try:
         obj = await store.objects.create_object(
             db,
@@ -119,12 +107,10 @@ async def create_object(
 @router.get("/{object_id}", response_model=ObjectResponse)
 async def get_object(
     object_id: str,
-    x_agent_id: Optional[str] = Header(None),
+    requesting_agent_id: str = Depends(require_agent),
     db: AsyncSession = Depends(get_db),
 ):
     """Retrieve a ContentBank object by ID. Access enforced by scope rules."""
-    requesting_agent_id = _get_requesting_agent(x_agent_id)
-
     try:
         obj = await store.objects.get_object(
             db,
@@ -143,18 +129,16 @@ async def get_object(
 async def update_object(
     object_id: str,
     body: ObjectUpdateRequest,
-    x_agent_id: Optional[str] = Header(None),
+    requesting_agent_id: str = Depends(require_agent),
     db: AsyncSession = Depends(get_db),
 ):
     """Update mutable fields of an object. Requester must be the owner."""
-    requesting_agent_id = _get_requesting_agent(x_agent_id)
-
     try:
         obj = await store.objects.update_object(
             db,
             obj_id=object_id,
             requesting_agent_id=requesting_agent_id,
-            capability_data=body.metadata,
+            metadata=body.metadata,
             scope=body.scope,
             blobs_add=[b.model_dump() for b in body.blobs_add],
             blobs_remove=body.blobs_remove,
@@ -172,12 +156,10 @@ async def update_object(
 @router.delete("/{object_id}", status_code=204)
 async def delete_object(
     object_id: str,
-    x_agent_id: Optional[str] = Header(None),
+    requesting_agent_id: str = Depends(require_agent),
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a ContentBank object. Requester must be the owner."""
-    requesting_agent_id = _get_requesting_agent(x_agent_id)
-
     try:
         await store.objects.delete_object(
             db,
@@ -198,12 +180,10 @@ async def list_objects(
     cursor: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=500),
     sort: str = Query("-updated_at"),
-    x_agent_id: Optional[str] = Header(None),
+    requesting_agent_id: str = Depends(require_agent),
     db: AsyncSession = Depends(get_db),
 ):
     """List ContentBank objects visible to the requesting agent."""
-    requesting_agent_id = _get_requesting_agent(x_agent_id)
-
     objects, next_cursor = await store.objects.list_objects(
         db,
         requesting_agent_id=requesting_agent_id,

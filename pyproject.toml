@@ -43,7 +43,7 @@ dev = [
 ]
 
 [project.scripts]
-contentbank = "contentbank.main:main"
+contentbank = "contentbank.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
