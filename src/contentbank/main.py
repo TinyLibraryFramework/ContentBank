@@ -13,6 +13,7 @@ from contentbank.core.validation import load_shapes
 from contentbank.api.routes import objects, replication, proxy, auth, agents
 from contentbank.capabilities.calendar.routes import router as calendar_router
 from contentbank.capabilities.inventory.routes import router as inventory_router
+from contentbank.replication.worker import start_worker, stop_worker
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +24,11 @@ async def lifespan(app: FastAPI):
     # Pre-load SHACL shapes at startup so first request isn't slow
     logger.info(f"Loading SHACL shapes from {settings.shapes_dir}")
     load_shapes(str(settings.shapes_dir))
+    # Start replication worker
+    start_worker()
     logger.info("ContentBank ready")
     yield
+    stop_worker()
     logger.info("ContentBank shutting down")
 
 

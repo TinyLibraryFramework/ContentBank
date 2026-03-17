@@ -30,6 +30,8 @@ dependencies = [
     "cryptography>=42",
     # Config
     "pydantic-settings>=2.3",
+    # HTTP client (replication peer pulls)
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
