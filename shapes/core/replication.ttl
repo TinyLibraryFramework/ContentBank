@@ -1,0 +1,146 @@
+@prefix tl:     <https://tinylibrary.io/ns#> .
+@prefix sh:     <http://www.w3.org/ns/shacl#> .
+@prefix xsd:    <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
+
+# =============================================================================
+# TinyLibrary ContentBank — Replication Shapes
+# Namespace: https://tinylibrary.io/ns#
+# Version: 0.1.0 (2026-03-16)
+#
+# Replication protocol: peer-to-peer pull, configurable interval, no central
+# coordinator. Fully or partially meshed topology.
+#
+# Change log and peer sync state are application-layer PostgreSQL tables
+# (replication.log, replication.peer_state) — not RDF content objects.
+#
+# This file defines only the ContentBank-resident data model shapes:
+#   tl:ReplicationPeer  — a known peer node in the replication group
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# ReplicationPeer — a peer node this ContentBank replicates with
+#
+# Stored as a ContentBank object so peer configuration is itself replicated
+# across the mesh. Adding a peer on one node propagates to all peers.
+# -----------------------------------------------------------------------------
+
+tl:ReplicationPeer a rdfs:Class ;
+    rdfs:subClassOf tl:Object ;
+    rdfs:comment "A peer node participating in ContentBank replication. tl:typeSlug = 'replication_peer'. Stored in ContentBank so peer config replicates automatically." .
+
+tl:ReplicationPeerShape a sh:NodeShape ;
+    sh:targetClass tl:ReplicationPeer ;
+    sh:closed false ;
+
+    sh:property [
+        sh:path     tl:typeSlug ;
+        sh:hasValue "replication_peer" ;
+        sh:message  "ReplicationPeer must have tl:typeSlug 'replication_peer'." ;
+    ] ;
+
+    # --- Peer node identity ---
+    sh:property [
+        sh:path     tl:peerNodeId ;
+        sh:datatype xsd:string ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:pattern  "^urn:cb:node:[0-9a-f-]{36}$" ;
+        sh:comment  "IRI of the peer tl:Node." ;
+    ] ;
+
+    # --- Replication endpoint ---
+    sh:property [
+        sh:path     tl:endpoint ;
+        sh:datatype xsd:string ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:comment  "Replication sync endpoint. HTTPS URL for IP-connected nodes; mesh address for Meshtastic/Donkey Net nodes." ;
+    ] ;
+
+    # --- Sync policy ---
+    sh:property [
+        sh:path     tl:syncIntervalSeconds ;
+        sh:datatype xsd:integer ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:minInclusive 10 ;
+        sh:comment  "Pull sync interval in seconds. Default: 60. Minimum: 10." ;
+    ] ;
+
+    sh:property [
+        sh:path     tl:syncEnabled ;
+        sh:datatype xsd:boolean ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:comment  "Whether sync with this peer is active." ;
+    ] ;
+
+    # --- Peer public key (for JWT verification on sync endpoint) ---
+    sh:property [
+        sh:path     tl:peerPublicKey ;
+        sh:datatype xsd:string ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:comment  "Public key of the peer node (base64url). Used to verify signed sync requests from this peer." ;
+    ] ;
+
+    # --- Transport type ---
+    sh:property [
+        sh:path     tl:transportType ;
+        sh:datatype xsd:string ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:in       ( "https" "mesh" ) ;
+        sh:comment  "'https' for IP-connected nodes; 'mesh' for Meshtastic/Donkey Net." ;
+    ] .
+
+
+# =============================================================================
+# Replication protocol notes (non-normative)
+# =============================================================================
+#
+# APPLICATION-LAYER TABLES (PostgreSQL replication schema):
+#
+# replication.log
+#   seq                    BIGSERIAL PRIMARY KEY
+#   node_id                TEXT           originating node UUID
+#   node_seq               BIGINT         seq on originating node
+#   object_id              TEXT           urn:cb:{type}:{uuid}
+#   change_type            TEXT           insert | update | delete
+#   updated_at             TIMESTAMPTZ
+#   scope_group_dep_node   TEXT NULL      causal dependency node (see below)
+#   scope_group_dep_seq    BIGINT NULL    causal dependency seq
+#
+# replication.peer_state
+#   peer_node_id           TEXT PRIMARY KEY
+#   last_seen_seq          BIGINT DEFAULT 0
+#   last_sync_at           TIMESTAMPTZ
+#
+# PULL SYNC CYCLE:
+#   GET /replication/sync?since={last_seen_seq}&limit=500
+#   For each event:
+#     - No scope_group_dep → validate (pySHACL) + apply
+#     - scope_group_dep present → check local log for (dep_node, dep_seq);
+#       if present apply; if not, hold in causal queue until dependency arrives
+#   Update peer_state.last_seen_seq after all events applied or queued
+#
+# SCOPEGROUP CAUSAL DEPENDENCY:
+#   When a ScopeGroup is modified at (node=A, seq=N):
+#     - That log entry has no scope_group_dep
+#   Any subsequent write on Node A referencing that ScopeGroup records:
+#     - scope_group_dep_node = A, scope_group_dep_seq = N
+#   Receiving nodes hold dependent writes until the ScopeGroup event is present.
+#   Effect: no node processes a write against a ScopeGroup version it hasn't seen.
+#
+# CONFLICT RESOLUTION:
+#   Last-write-wins by (updated_at, node_id) as deterministic tiebreaker.
+#   Losing write is recorded in log for audit; not applied to content.
+#
+# FUTURE EXTENSIONS (reserved, not yet implemented):
+#   - Async push on write (complement to pull)
+#   - Transactional sync (atomic multi-object commits)
+#   - Git-like protocol (merkle DAG, branch/merge)
+#   - Dynamic peer discovery
+#   - Conflict flagging with agent-mediated resolution
